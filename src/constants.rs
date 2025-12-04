@@ -5,5 +5,5 @@ pub const DEFAULT_NAME: &str = "Guest";
 pub const CMD_MESSAGE: &str = "MSG";
 pub const CMD_RENAME: &str = "IAM";
 
-pub const ERR_WS_CONN: &str = "Invalid Websocket Handshake.";
-pub const ERR_WS_VER: &str = "Unsupported WebSocket version.";
+pub const ERR_WS_CONNECTION: &str = "Invalid Websocket Handshake.";
+pub const ERR_WS_VERSION: &str = "Unsupported WebSocket version.";

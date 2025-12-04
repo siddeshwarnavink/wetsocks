@@ -6,6 +6,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use bytes::BytesMut;
 use sha1::{Digest, Sha1};
+use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
@@ -13,6 +14,7 @@ use tokio::task::yield_now;
 use tokio::time::timeout;
 
 use crate::constants::*;
+use crate::http::header::{self, HttpHeader, HttpVerb};
 use crate::ws::frame;
 use crate::{MESSAGES, USERS};
 
@@ -31,7 +33,7 @@ pub struct User {
     pub shared_stream: Arc<Mutex<TcpStream>>,
 }
 
-pub async fn client_request_handler(
+async fn client_request_handler(
     shared_stream: Arc<Mutex<TcpStream>>,
     mut buf: BytesMut,
     user_id: String,
@@ -80,70 +82,101 @@ pub async fn client_request_handler(
     }
 }
 
-pub async fn new_client_handler(
+async fn not_found_handler(
     shared_stream: Arc<Mutex<TcpStream>>,
 ) -> io::Result<()> {
     let mut stream = shared_stream.lock().await;
 
-    let mut buf = BytesMut::with_capacity(4096);
-    buf.reserve(1024);
+    let body = "404 Not Found";
+    let response = format!(
+        "HTTP/1.1 404 Not Found\r\n\
+         Content-Type: text/plain; charset=utf-8\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\
+         \r\n\
+         {}",
+        body.len(),
+        body
+    );
 
-    let len = stream.read_buf(&mut buf).await?;
-    let s = str::from_utf8(&buf[0..len])
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    stream.write_all(response.as_bytes()).await?;
+    stream.flush().await?;
 
-    let mut accept_key = None;
-    for line in s.split("\r\n") {
-        let mut it = line.split(": ");
-        let key = it.next().unwrap_or_default();
-        let value = it.next().unwrap_or_default();
+    Ok(())
+}
 
-        match key {
-            "Upgrade" => {
-                if value != "websocket" {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        ERR_WS_CONN,
-                    ));
-                }
-            }
-            "Sec-WebSocket-Version" => {
-                if value != "13" {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        ERR_WS_VER,
-                    ));
-                }
-            }
-            "Sec-WebSocket-Key" => {
-                let combined = format!("{}{}", value, WS_GUID);
+async fn static_resource_handler(
+    shared_stream: Arc<Mutex<TcpStream>>,
+    filename: &str,
+) -> io::Result<()> {
+    let mut stream = shared_stream.lock().await;
 
-                let mut hasher = Sha1::new();
-                hasher.update(combined.as_bytes());
-                let hashed = hasher.finalize();
+    let path = format!("./static/{filename}");
 
-                let encoded = B64.encode(hashed);
+    let body = fs::read_to_string(&path).await?;
+    let response = format!(
+        "HTTP/1.1 200 Ok\r\n\
+         Content-Type: text/html; charset=utf-8\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\
+         \r\n\
+         {}",
+        body.len(),
+        body
+    );
 
-                accept_key = Some(encoded);
-            }
-            _ => {}
+    stream.write_all(response.as_bytes()).await?;
+    stream.flush().await?;
+
+    Ok(())
+}
+
+async fn ws_handler(
+    shared_stream: Arc<Mutex<TcpStream>>,
+    http_header: HttpHeader,
+    buf: BytesMut,
+) -> io::Result<()> {
+    let mut stream = shared_stream.lock().await;
+
+    if let Some(val) = http_header.table.get("Upgrade") {
+        if val != "websocket" {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                ERR_WS_CONNECTION,
+            ));
         }
     }
 
-    if let Some(accept) = accept_key {
+    if let Some(val) = http_header.table.get("Sec-WebSocket-Version") {
+        if val != "13" {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                ERR_WS_VERSION,
+            ));
+        }
+    }
+
+    if let Some(key) = http_header.table.get("Sec-WebSocket-Key") {
+        let combined = format!("{}{}", key, WS_GUID);
+
+        let mut hasher = Sha1::new();
+        hasher.update(combined.as_bytes());
+        let hashed = hasher.finalize();
+        let user_id = B64.encode(hashed);
+
         let response = format!(
             "HTTP/1.1 101 Switching Protocols\r\n\
              Upgrade: websocket\r\n\
              Connection: Upgrade\r\n\
              Sec-WebSocket-Accept: {}\r\n\r\n",
-            accept
+            user_id
         );
         stream.write_all(response.as_bytes()).await?;
 
         drop(response);
+        drop(http_header);
         drop(stream);
 
-        let user_id = accept.to_string();
         user_join(&user_id, shared_stream.clone(), DEFAULT_NAME).await;
 
         client_request_handler(
@@ -155,6 +188,38 @@ pub async fn new_client_handler(
     }
 
     Ok(())
+}
+
+pub async fn request_handler(
+    shared_stream: Arc<Mutex<TcpStream>>,
+) -> io::Result<()> {
+    let mut stream = shared_stream.lock().await;
+
+    let mut buf = BytesMut::with_capacity(4096);
+    buf.reserve(1024);
+
+    let len = stream.read_buf(&mut buf).await?;
+    let s = str::from_utf8(&buf[..len])
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+    let http_header = header::parse(s).map_err(|_| {
+        io::Error::new(io::ErrorKind::InvalidData, "Invalid HTTP header.")
+    })?;
+
+    drop(stream);
+
+    match (http_header.verb.clone(), http_header.path.as_str()) {
+        (HttpVerb::Get, "/") => {
+            static_resource_handler(shared_stream.clone(), "index.html").await
+        }
+        (HttpVerb::Get, "/script.js") => {
+            static_resource_handler(shared_stream.clone(), "script.js").await
+        }
+        (HttpVerb::Get, "/ws") => {
+            ws_handler(shared_stream.clone(), http_header, buf).await
+        }
+        _ => not_found_handler(shared_stream.clone()).await,
+    }
 }
 
 async fn user_join(id: &str, shared_stream: Arc<Mutex<TcpStream>>, name: &str) {
@@ -223,6 +288,7 @@ async fn post_server_message(text: &str) {
 
 async fn dispatch_messages() {
     let mut buf = BytesMut::with_capacity(4096);
+    buf.reserve(1024);
 
     let mut messages = MESSAGES.lock().await;
     if messages.len() < 1 {

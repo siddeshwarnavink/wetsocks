@@ -1,4 +1,5 @@
 mod constants;
+pub mod http;
 pub mod service;
 pub mod ws;
 
@@ -34,7 +35,7 @@ async fn main() {
 
             tokio::spawn(async move {
                 if let Err(err) =
-                    service::new_client_handler(shared_stream.clone()).await
+                    service::request_handler(shared_stream.clone()).await
                 {
                     let msg = err.to_string();
                     eprintln!("[error] {msg}");
