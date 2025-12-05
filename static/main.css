@@ -1,0 +1,106 @@
+@import url('https://fonts.googleapis.com/css2?family=Nunito+Sans:ital,opsz,wght@0,6..12,200..1000;1,6..12,200..1000&display=swap');
+
+body {
+    margin: 0;
+    font-family: "Nunito Sans", sans-serif;
+}
+
+.input {
+    padding: 6px 12px;
+    font-size: 1.15em;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    outline: none;
+}
+
+.btn {
+    cursor: pointer;
+    background: #d89f24;
+    background: linear-gradient(0deg, rgba(216, 159, 36, 1) 0%, rgba(245, 211, 140, 1) 50%, rgba(247, 181, 39, 1) 100%);
+    color: #000;
+    border: 1px solid #efefef;
+    border-radius: 6px;
+    padding: 6px 32px;
+    font-size: 1.15em;
+    font-weight: bold;
+
+    &:hover {
+        background: #D89F24;
+        background: linear-gradient(0deg, rgba(216, 159, 36, 1) 0%, rgba(245, 211, 140, 1) 77%, rgba(247, 181, 39, 1) 100%);
+    }
+}
+
+@keyframes ass_sliding {
+    from {
+        transform: translateY(-500px);
+    }
+    to {
+        transform: translateY(0px);
+    }
+}
+
+dialog.model {
+    margin-top: 20px;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    box-shadow:0 2px 4px 0 rgba(0,0,0,0.16),0 2px 10px 0 rgba(0,0,0,0.12);
+    width: 450px;
+    animation: ass_sliding 500ms;
+
+    &::backdrop {
+        background: rgb(0 0 0 / 25%);
+    }
+
+    h1 {
+        font-size: 1.75rem;
+    }
+
+    h1, p {
+        padding: 0;
+        margin: 0;
+        margin-bottom: 5px;
+    }
+
+    form {
+        margin-top: 15px;
+    }
+}
+
+.container {
+    height: 100vh;
+    display: flex;
+    flex-flow: column;
+}
+
+#messages {
+    height: 90%;
+    overflow-y: scroll;
+    background-color: #efefef;
+    padding: 12px;
+
+    .server-message {
+        color: #555;
+        padding: 5px 0;
+    }
+
+    .user-message {
+        font-size: 1.2em;
+    }
+}
+
+#message_form {
+    display: flex;
+    flex-flow: column;
+    justify-content: center;
+    background-color: #ffffff;
+
+    .row {
+        display: grid;
+        grid-template-columns: 90% auto;
+        padding: 0 25px;
+
+        input {
+            margin-right: 15px;
+        }
+    }
+}

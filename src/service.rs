@@ -108,6 +108,7 @@ async fn not_found_handler(
 async fn static_resource_handler(
     shared_stream: Arc<Mutex<TcpStream>>,
     filename: &str,
+    mime_type: &str,
 ) -> io::Result<()> {
     let mut stream = shared_stream.lock().await;
 
@@ -116,11 +117,12 @@ async fn static_resource_handler(
     let body = fs::read_to_string(&path).await?;
     let response = format!(
         "HTTP/1.1 200 Ok\r\n\
-         Content-Type: text/html; charset=utf-8\r\n\
+         Content-Type: {}; charset=utf-8\r\n\
          Content-Length: {}\r\n\
          Connection: close\r\n\
          \r\n\
          {}",
+        mime_type,
         body.len(),
         body
     );
@@ -210,10 +212,28 @@ pub async fn request_handler(
 
     match (http_header.verb.clone(), http_header.path.as_str()) {
         (HttpVerb::Get, "/") => {
-            static_resource_handler(shared_stream.clone(), "index.html").await
+            static_resource_handler(
+                shared_stream.clone(),
+                "index.html",
+                "text/html",
+            )
+            .await
         }
         (HttpVerb::Get, "/script.js") => {
-            static_resource_handler(shared_stream.clone(), "script.js").await
+            static_resource_handler(
+                shared_stream.clone(),
+                "script.js",
+                "text/javascript",
+            )
+            .await
+        }
+        (HttpVerb::Get, "/main.css") => {
+            static_resource_handler(
+                shared_stream.clone(),
+                "main.css",
+                "text/css",
+            )
+            .await
         }
         (HttpVerb::Get, "/ws") => {
             ws_handler(shared_stream.clone(), http_header, buf).await
@@ -231,10 +251,6 @@ async fn user_join(id: &str, shared_stream: Arc<Mutex<TcpStream>>, name: &str) {
 
     users.insert(id.into(), new_user);
     println!("[info] New user {id} joined.");
-
-    drop(users);
-
-    post_server_message(&format!("{} joined the chat.", name)).await;
 }
 
 async fn user_leave(id: &str) {
@@ -250,6 +266,9 @@ async fn user_rename(id: &str, name: &str) {
         user.name = name.into();
         println!("[info] User {id} changed name to {name}.");
     }
+
+    drop(users);
+    post_server_message(&format!("{} joined the chat.", name)).await;
 }
 
 async fn post_user_message(id: &str, text: &str) {

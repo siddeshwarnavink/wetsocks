@@ -27,7 +27,7 @@ async fn main() {
         exit(1);
     });
 
-    println!("Listening to ws://{}/", addr);
+    println!("Listening to http://{}/", addr);
 
     loop {
         if let Ok((stream, _)) = listener.accept().await {

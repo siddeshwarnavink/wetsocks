@@ -1,15 +1,34 @@
 <!DOCTYPE html>
 <html>
-  <head>
-    <title>WetSocks</title>
-  </head>
-  <body>
-    <h1>WetSocks</h1>
-    <div id="messages"></div>
+    <head>
+        <title>WetSocks</title>
+        <link rel="stylesheet" href="/main.css" />
+    </head>
+    <body>
+        <dialog class="model" id="welcome_dialog">
+            <h1>Hey there!</h1>
+            <p>Welcome to the Anonymous, written in Rust btw. Give yourself a nickname to get started!</p>
 
-    <input id="message_input" />
-    <button id="message_btn">Send</button>
+            <form method="dialog" onsubmit="onwelcome(event)">
+                <input class="input" name="nickname" placeholder="e.g Sid" autocomplete="off" required />
+                <button class="btn" type="submit">Enter</button>
+            </form>
+        </dialog>
 
-    <script src="script.js"></script>
-  </body>
+        <div class="container">
+            <div id="messages"></div>
+
+            <form id="message_form">
+                <div style="flex:1;">&nbsp;</div>
+                <div class="row">
+                    <input class="input" name="message" autocomplete="off" required
+                    placeholder="e.g: I'd just like to interject for a moment. What you're refering to as Linux, is in fact, GNU/Linux..." />
+                    <button class="btn" type="submit">Send</button>
+                </div>
+                <div style="flex:1;">&nbsp;</div>
+            </form>
+        </div>
+
+        <script src="/script.js"></script>
+    </body>
 </html>
