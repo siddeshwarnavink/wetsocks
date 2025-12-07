@@ -1,19 +1,17 @@
-import init, { generate_keypair } from "/crypto_wasm.js";
+import init, { 
+    generate_keypair,
+    encrypt_message,
+    decrypt_message 
+} from "/crypto_wasm.js";
 
-var welcome = document.getElementById("welcome_dialog");
-var messages = document.getElementById("messages");
-var form = document.getElementById("message_form");
+const welcome = document.getElementById("welcome_dialog");
+const messages = document.getElementById("messages");
+const form = document.getElementById("message_form");
 
-var socket, keys;
+let socket, my_name, my_keys;
+const users = {};
 
-init().then(function() {
-    keys = JSON.parse(generate_keypair());
-    console.log(keys);
-
-    welcome.showModal();
-});
-
-function stringToHighContrastHexColor(str) {
+function nameColor(str) {
     let hash = 0;
     for (let i = 0; i < str.length; i++) {
         hash = str.charCodeAt(i) + ((hash << 5) - hash);
@@ -52,34 +50,76 @@ function stringToHighContrastHexColor(str) {
     return `#${rHex}${gHex}${bHex}`.toUpperCase();
 }
 
-function onmessage(event) {
-    var msg = event.data;
-    var match = msg.match(/(.*): (.*)/);
+function append_user_message(name, text) {
+    const color = nameColor(name);
+    messages.innerHTML += `<div class="user-message">
+            <b style="color:${color}">${name}: </b>
+            ${text}
+        </div>`;
+}
 
-    if (match) {
-        var color = stringToHighContrastHexColor(match[1]);
-        messages.innerHTML += `<div class="user-message">
-            <b style="color:${color}">${match[1]}: </b>
-            ${match[2]}</div>`;
-    } else {
-        messages.innerHTML += `<div class="server-message">${msg}</div>`;
+function append_server_message(text) {
+    messages.innerHTML += `<div class="server-message">${text}</div>`;
+}
+
+function onmessage(event) {
+    const msg = JSON.parse(event.data);
+    console.log(msg);
+
+    switch(msg.kind) {
+        case "new_user":
+            users[msg.user.id] = msg.user;
+            append_server_message(`${msg.user.name} joined the chat.`);
+            break;
+        case "relay_message":
+            const user = users[msg.sender];
+            const text = decrypt_message(msg.payload, my_keys.private_key);
+            append_user_message(user.name, text);
+            break;
     }
 }
 
 function onwelcome(event) {
-    var name = event.target.getElementsByTagName("input")[0].value;
+    my_name = event.target.getElementsByTagName("input")[0].value;
     socket = new WebSocket("/ws");
 
     socket.onopen = function() {
-        socket.send("IAM " + name);
+        socket.send(JSON.stringify({
+            kind: "first",
+            public_key: my_keys.public_key,
+            name: my_name
+        }));
 
-        form.addEventListener("submit", function(event) {
+        form.addEventListener("submit", (event) => {
             event.preventDefault();
-            var msg = event.target.getElementsByTagName("input")[0].value;
-            socket.send("MSG " + msg);
+            const text = event.target.getElementsByTagName("input")[0].value;
+
+            append_user_message(my_name, text);
+
+            Object.keys(users).forEach(user_id => {
+                const user = users[user_id];
+                const payload = encrypt_message(text, user.public_key);
+                socket.send(JSON.stringify({
+                    kind: "send_message",
+                    recipient: user_id,
+                    payload
+                }));
+            });
+
             event.target.reset();
         });
     };
 
     socket.onmessage = onmessage;
+
+    append_server_message(`${my_name} joined the chat.`);
 }
+
+init().then(function() {
+    my_keys = JSON.parse(generate_keypair());
+
+    const form = welcome_dialog.getElementsByTagName("form")[0];
+    form.addEventListener("submit", onwelcome);
+
+    welcome.showModal();
+});

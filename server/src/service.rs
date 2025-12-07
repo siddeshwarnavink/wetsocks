@@ -5,6 +5,7 @@ use std::time::Duration;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use bytes::BytesMut;
+use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -16,21 +17,43 @@ use tokio::time::timeout;
 use crate::constants::*;
 use crate::http::header::{self, HttpHeader, HttpVerb};
 use crate::ws::frame;
-use crate::{MESSAGES, USERS};
+use crate::{USERS};
 
-pub enum MessageKind {
-    ServerMessage,
-    UserMessage,
-}
-
+#[derive(Serialize, Deserialize)]
 pub struct Message {
-    pub kind: MessageKind,
-    pub text: String,
+    pub sender: String,
+    pub payload: String,
 }
 
+fn default_stream() -> Arc<Mutex<TcpStream>> {
+    panic!("shared_stream should never be deserialized");
+}
+
+#[derive(Serialize, Deserialize, Clone)]
 pub struct User {
+    pub id: String,
     pub name: String,
+    pub public_key: Option<String>,
+
+    #[serde(skip)]
+    #[serde(default = "default_stream")]
     pub shared_stream: Arc<Mutex<TcpStream>>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum Payload {
+    #[serde(rename = "send_message")]
+    SendMessage { recipient: String, payload: String },
+
+    #[serde(rename = "relay_message")]
+    RelayMessage { sender: String, payload: String },
+
+    #[serde(rename = "first")]
+    First { public_key: String, name: String },
+
+    #[serde(rename = "new_user")]
+    NewUser { user: User },
 }
 
 async fn client_request_handler(
@@ -59,26 +82,122 @@ async fn client_request_handler(
             break Ok(());
         }
 
-        if let Ok(req) = frame::get_text(&buf[..len]) {
-            if req.len() < 4 {
+        if let Ok(req_json) = frame::get_text(&buf[..len]) {
+            if req_json.len() < 1 {
                 println!("[error] invalid request from {user_id}");
                 yield_now().await;
                 continue;
             }
 
-            let cmd = &req[..3];
-            let payload = &req[4..];
-
-            match cmd {
-                CMD_MESSAGE => {
-                    post_user_message(user_id.as_str(), payload).await
+            let req = match serde_json::from_str(&req_json) {
+                Ok(j) => j,
+                Err(_) => {
+                    println!("[error] invalid JSON from {user_id}");
+                    println!("[error] json = {}", req_json);
+                    yield_now().await;
+                    continue;
                 }
-                CMD_RENAME => user_rename(user_id.as_str(), payload).await,
-                _ => println!("[error] invalid command {cmd} from {user_id}"),
-            }
+            };
+
+            let shared_stream = shared_stream.clone();
+            let user_id = user_id.clone();
+
+            tokio::spawn(async move {
+                match req {
+                    Payload::First { public_key, name } => {
+                        user_first_setup(
+                            user_id.as_str(),
+                            name.as_str(),
+                            public_key.as_str(),
+                        )
+                        .await;
+                        dispatch_all_keys(
+                            user_id.as_str(),
+                            shared_stream.clone(),
+                        )
+                        .await;
+                    }
+                    Payload::SendMessage { recipient, payload } => {
+                        relay_message(user_id.as_str(), recipient.as_str(), payload.as_str()).await;
+                    }
+                    _ => {}
+                }
+            });
         }
 
         yield_now().await;
+    }
+}
+
+async fn dispatch_all_keys(
+    user_id: &str,
+    shared_stream: Arc<Mutex<TcpStream>>,
+) {
+    let users = USERS.lock().await;
+    let user = match users.get(user_id) {
+        Some(u) => u,
+        None => return,
+    };
+
+    let user_data = Payload::NewUser {
+        user: user.clone(),
+    };
+    let user_json = match serde_json::to_string(&user_data) {
+        Ok(j) => j,
+        Err(_) => return,
+    };
+
+
+    let mut buf = BytesMut::with_capacity(4096);
+    buf.reserve(1024);
+
+    let mut stream = shared_stream.lock().await;
+
+    for (_, user) in users.iter() {
+        if user.id == user_id {
+            continue;
+        }
+
+        let mut other_user_stream = user.shared_stream.lock().await;
+
+        buf.clear();
+        let len = frame::set_text(&mut buf, &user_json);
+        let _ = other_user_stream.write_all(&buf[..len]).await;
+
+        drop(other_user_stream);
+
+        let other_user_data = Payload::NewUser {
+            user: user.clone(),
+        };
+        let other_user_json = match serde_json::to_string(&other_user_data) {
+            Ok(j) => j,
+            Err(_) => continue,
+        };
+
+        buf.clear();
+        let len = frame::set_text(&mut buf, &other_user_json);
+        let _ = stream.write_all(&buf[..len]).await;
+    }
+}
+
+async fn relay_message(sender: &str, recipient: &str, payload: &str) {
+    let users = USERS.lock().await;
+
+    if let Some(user) = users.get(recipient) {
+        let mut stream = user.shared_stream.lock().await;
+
+        let mut buf = BytesMut::with_capacity(4096);
+        buf.reserve(1024);
+
+        let msg = Payload::RelayMessage {
+            sender: sender.to_string(),
+            payload: payload.to_string(),
+        };
+
+        if let Ok(json) = serde_json::to_string(&msg) {
+            let len = frame::set_text(&mut buf, &json);
+            let _ = stream.write_all(&buf[..len]).await;
+        }
     }
 }
 
@@ -260,8 +379,10 @@ pub async fn request_handler(
 async fn user_join(id: &str, shared_stream: Arc<Mutex<TcpStream>>, name: &str) {
     let mut users = USERS.lock().await;
     let new_user = User {
+        id: id.into(),
         name: name.into(),
         shared_stream: shared_stream.clone(),
+        public_key: None
     };
 
     users.insert(id.into(), new_user);
@@ -275,71 +396,10 @@ async fn user_leave(id: &str) {
     println!("[info] User {id} left.");
 }
 
-async fn user_rename(id: &str, name: &str) {
+async fn user_first_setup(id: &str, name: &str, public_key: &str) {
     let mut users = USERS.lock().await;
     if let Some(user) = users.get_mut(id) {
         user.name = name.into();
-        println!("[info] User {id} changed name to {name}.");
-    }
-
-    drop(users);
-    post_server_message(&format!("{} joined the chat.", name)).await;
-}
-
-async fn post_user_message(id: &str, text: &str) {
-    let users = USERS.lock().await;
-    let mut messages = MESSAGES.lock().await;
-    if let Some(user) = users.get(id) {
-        let new_msg = Message {
-            kind: MessageKind::ServerMessage,
-            text: format!("{}: {}", user.name, text),
-        };
-
-        messages.push(new_msg);
-        println!("[info] User {id} posted new message.");
-
-        drop(users);
-        drop(messages);
-
-        dispatch_messages().await;
-    }
-}
-
-async fn post_server_message(text: &str) {
-    let mut messages = MESSAGES.lock().await;
-    let new_msg = Message {
-        kind: MessageKind::ServerMessage,
-        text: text.into(),
-    };
-
-    messages.push(new_msg);
-    println!("[info] New message \"{text}\".");
-
-    drop(messages);
-
-    dispatch_messages().await;
-}
-
-async fn dispatch_messages() {
-    let mut buf = BytesMut::with_capacity(4096);
-    buf.reserve(1024);
-
-    let mut messages = MESSAGES.lock().await;
-    if messages.len() < 1 {
-        return;
-    }
-
-    let users = USERS.lock().await;
-
-    while let Some(message) = messages.pop() {
-        for (_, user) in users.iter() {
-            let mut stream = user.shared_stream.lock().await;
-            let response = format!("{}", message.text);
-
-            buf.clear();
-            let len = frame::set_text(&mut buf, &response);
-
-            let _ = stream.write_all(&buf[..len]).await;
-        }
+        user.public_key = Some(public_key.into());
     }
 }
