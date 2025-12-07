@@ -74,11 +74,16 @@ pub mod frame {
 
 #[cfg(test)]
 mod ws_frame_tests {
+    use crate::ws::frame::{get_text, set_text};
+    use bytes::BytesMut;
     use const_format::str_repeat;
+
     #[test]
     fn test_ws_get_text() {
         let msg = "aaa";
-        let buf = [129, 131, 194, 47, 97, 242, 163, 78, 0];
+
+        let mut buf = BytesMut::with_capacity(1024);
+        buf.extend_from_slice(&[129, 131, 194, 47, 97, 242, 163, 78, 0]);
 
         let decoded = get_text(&buf).expect("failed to decode frame");
         assert_eq!(decoded, msg);
@@ -87,7 +92,7 @@ mod ws_frame_tests {
     #[test]
     fn test_ws_text_frame_small() {
         let msg = str_repeat!("a", 3);
-        let mut buf = [0; 1024];
+        let mut buf = BytesMut::with_capacity(1024);
 
         let _ = set_text(&mut buf, msg);
         let decoded = get_text(&buf).expect("failed to decode frame");
@@ -97,7 +102,7 @@ mod ws_frame_tests {
     #[test]
     fn test_ws_text_frame_medium() {
         let msg = str_repeat!("a", 150);
-        let mut buf = [0; 1024];
+        let mut buf = BytesMut::with_capacity(1024);
 
         let _ = set_text(&mut buf, msg);
         let decoded = get_text(&buf).expect("failed to decode frame");
@@ -107,7 +112,7 @@ mod ws_frame_tests {
     #[test]
     fn test_ws_text_frame_huge() {
         let msg = str_repeat!("a", 65536);
-        let mut buf = [0; 1024 * 1024];
+        let mut buf = BytesMut::with_capacity(1024 * 1024);
 
         let _ = set_text(&mut buf, msg);
         let decoded = get_text(&buf).expect("failed to decode frame");

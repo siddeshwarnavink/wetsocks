@@ -114,20 +114,19 @@ async fn static_resource_handler(
 
     let path = format!("./static/{filename}");
 
-    let body = fs::read_to_string(&path).await?;
-    let response = format!(
+    let body = fs::read(&path).await?;
+    let header = format!(
         "HTTP/1.1 200 Ok\r\n\
          Content-Type: {}; charset=utf-8\r\n\
          Content-Length: {}\r\n\
          Connection: close\r\n\
-         \r\n\
-         {}",
+         \r\n",
         mime_type,
         body.len(),
-        body
     );
 
-    stream.write_all(response.as_bytes()).await?;
+    stream.write_all(header.as_bytes()).await?;
+    stream.write_all(&body).await?;
     stream.flush().await?;
 
     Ok(())
@@ -232,6 +231,22 @@ pub async fn request_handler(
                 shared_stream.clone(),
                 "main.css",
                 "text/css",
+            )
+            .await
+        }
+        (HttpVerb::Get, "/crypto_wasm.js") => {
+            static_resource_handler(
+                shared_stream.clone(),
+                "crypto-wasm/crypto_wasm.js",
+                "text/javascript",
+            )
+            .await
+        }
+        (HttpVerb::Get, "/crypto_wasm_bg.wasm") => {
+            static_resource_handler(
+                shared_stream.clone(),
+                "crypto-wasm/crypto_wasm_bg.wasm",
+                "application/wasm",
             )
             .await
         }

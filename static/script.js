@@ -1,10 +1,17 @@
+import init, { generate_keypair } from "/crypto_wasm.js";
+
 var welcome = document.getElementById("welcome_dialog");
 var messages = document.getElementById("messages");
 var form = document.getElementById("message_form");
 
-welcome.showModal();
+var socket, keys;
 
-var socket;
+init().then(function() {
+    keys = JSON.parse(generate_keypair());
+    console.log(keys);
+
+    welcome.showModal();
+});
 
 function stringToHighContrastHexColor(str) {
     let hash = 0;
@@ -12,14 +19,14 @@ function stringToHighContrastHexColor(str) {
         hash = str.charCodeAt(i) + ((hash << 5) - hash);
     }
     const hue = hash % 360;
-    const saturation = 85; 
-    const lightness = 60;   
-    const h = hue / 360; 
+    const saturation = 85;
+    const lightness = 60;
+    const h = hue / 360;
     const s = saturation / 100;
     const l = lightness / 100;
     let r, g, b;
     if (s === 0) {
-        r = g = b = l; 
+        r = g = b = l;
     } else {
         const hue2rgb = (p, q, t) => {
             if (t < 0) t += 1;

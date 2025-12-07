@@ -1,0 +1,12 @@
+[package]
+name = "wetsocks"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { version = "1.48.0", features = ["full"] }
+sha1 = "0.10.6"
+base64 = "0.22.1"
+const_format = "0.2.35"
+bytes = "1.11.0"
+lazy_static = "1.5.0"
