@@ -1,21 +1,18 @@
+import { User } from "./types";
 import * as utils from "./utils";
-import * as ws from "./wasm/crypto_wasm.js"
+import * as ws from "./wasm/crypto_wasm.js";
+import { messageStore } from "./store";
+
+const PROFILE_KEY = "profile";
 
 const welcome_dialog = document.getElementById("welcome_dialog") as HTMLDialogElement | null;
 const messages = document.getElementById("messages");
 const message_form = document.getElementById("message_form") as HTMLFormElement | null;
 
-interface User {
-    id: string;
-    name: string;
-    public_key: string;
-    private_key: string;
-};
-
 // Global state
 let socket: WebSocket | null = null;
-let my_name: string | null = null;
-let my_keys: { public_key: string; private_key: string; } | null = null;
+let profile: User | null = null;
+let groupId: string | null = null;
 const users: { [id: string]: User } = {};
 
 function append_user_message(name: string, text: string): void {
@@ -38,7 +35,23 @@ function append_server_message(text: string): void {
     }
 }
 
+async function load_stored_messages() {
+    if (messages) messages.innerHTML = "";
+
+    const msgs = await messageStore.getMessagesByGroupId(groupId);
+    console.log("Stored messages", {
+        groupId,
+        msgs
+    });
+
+    msgs.forEach(({ sender, payload }) => {
+        append_user_message(sender, payload);
+    });
+}
+
 function on_message(event: MessageEvent): void {
+    if (profile == null) return;
+
     const msg = JSON.parse(event.data);
     console.log(msg);
 
@@ -49,45 +62,50 @@ function on_message(event: MessageEvent): void {
             break;
         case "relay_message":
             const user = users[msg.sender];
-            if (my_keys && my_keys) {
-                const text = ws.decrypt_message(msg.payload, my_keys.private_key);
-                append_user_message(user.name, text);
-            }
+            const text = ws.decrypt_message(msg.payload, profile.private_key);
+
+            append_user_message(user.name, text);
+            messageStore.appendMessage({
+                sender: user.name,
+                payload: text,
+                groupId
+            });
             break;
         case "user_left":
-            const name = users[msg.user_id].name;
             delete users[msg.user_id];
-            append_server_message(`${name} left the chat.`);
+            // const name = users[msg.user_id].name;
+            // append_server_message(`${name} left the chat.`);
             break;
     }
 }
 
-function on_welcome(event: SubmitEvent) {
-    if (event.target == null) return;
-    const welcome_form = event.target as HTMLFormElement;
-
-    my_name = welcome_form.getElementsByTagName("input")[0].value;
+function ws_setup() {
     socket = new WebSocket("/ws");
 
-    socket.onopen = function() {
+    socket.onopen = () => {
         if (socket == null) return;
-        if (my_keys == null) return;
+        if (profile == null) return;
         if (message_form == null) return;
 
         socket.send(JSON.stringify({
             kind: "first",
-            public_key: my_keys.public_key,
-            name: my_name
+            public_key: profile.public_key,
+            name: profile.name
         }));
 
         message_form.addEventListener("submit", (event: SubmitEvent) => {
             event.preventDefault();
 
             if (event.target == null) return;
-            if (my_name == null) return;
+            if (profile == null) return;
 
             const text = message_form.getElementsByTagName("input")[0].value;
-            append_user_message(my_name, text);
+            append_user_message(profile.name, text);
+            messageStore.appendMessage({
+                sender: profile.name,
+                payload: text,
+                groupId
+            });
 
             Object.keys(users).forEach(user_id => {
                 const user = users[user_id];
@@ -107,13 +125,38 @@ function on_welcome(event: SubmitEvent) {
 
     socket.onmessage = on_message;
 
-    append_server_message(`${my_name} joined the chat.`);
+    groupId = null;
+    load_stored_messages();
 }
 
-my_keys = JSON.parse(ws.generate_keypair());
+function on_welcome(event: SubmitEvent) {
+    if (event.target == null) return;
+    if (profile == null) return;
+    const welcome_form = event.target as HTMLFormElement;
 
-if (welcome_dialog) {
-    const form = welcome_dialog.getElementsByTagName("form")[0];
-    form.addEventListener("submit", on_welcome);
-    welcome_dialog.showModal();
+    profile.name = welcome_form.getElementsByTagName("input")[0].value;
+    localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+
+    ws_setup();
+
+    append_server_message(`${profile.name} joined the chat.`);
 }
+
+messageStore.init().then(() => {
+    const profile_json = localStorage.getItem(PROFILE_KEY);
+    if (profile_json) {
+        profile = JSON.parse(profile_json);
+        ws_setup();
+    } else if (welcome_dialog) {
+        const { public_key, private_key } = JSON.parse(ws.generate_keypair()) as User;
+        profile = {
+            id: public_key,
+            name: "John Doe",
+            public_key,
+            private_key
+        }
+        const form = welcome_dialog.getElementsByTagName("form")[0];
+        form.addEventListener("submit", on_welcome);
+        welcome_dialog.showModal();
+    }
+});
