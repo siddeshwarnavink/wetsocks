@@ -7,6 +7,8 @@ const PROFILE_KEY = "profile";
 
 const welcome_dialog = document.getElementById("welcome_dialog") as HTMLDialogElement | null;
 const messages = document.getElementById("messages");
+const user_list = document.getElementById("user-list");
+const group_chat_item = document.querySelector('.chat-item[data-chat-id="group"]') as HTMLElement | null;
 const message_form = document.getElementById("message_form") as HTMLFormElement | null;
 
 // Global state
@@ -14,6 +16,52 @@ let socket: WebSocket | null = null;
 let profile: User | null = null;
 let groupId: string | null = null;
 const users: { [id: string]: User } = {};
+
+function update_users_list() {
+    if (!user_list) return;
+    user_list.innerHTML = "";
+    Object.keys(users).forEach(id => {
+        const user = users[id];
+        const color = utils.name_color(user.name);
+        const isActive = groupId === user.public_key ? 'active' : '';
+        user_list.innerHTML += `
+        <div class="chat-item ${isActive}" data-chat-id="${user.public_key}">
+            <div class="avatar online" style="background: ${color};">
+              ${user.name.charAt(0).toUpperCase()}
+            </div>
+            <div class="chat-info">
+                <div class="chat-name">${user.name}</div>
+                <div class="chat-status">Online</div>
+            </div>
+        </div>
+        `;
+    });
+
+    const chatItems = user_list.querySelectorAll('.chat-item');
+    chatItems.forEach(item => {
+        item.addEventListener('click', () => {
+            const chatId = item.getAttribute('data-chat-id');
+            select_chat(chatId);
+        });
+    });
+}
+
+function select_chat(chatId: string | null) {
+    groupId = chatId;
+
+    document.querySelectorAll('.chat-item').forEach(item => {
+        item.classList.remove('active');
+    });
+
+    if (chatId === null) {
+        group_chat_item?.classList.add('active');
+    } else {
+        const selectedItem = document.querySelector(`.chat-item[data-chat-id="${chatId}"]`);
+        selectedItem?.classList.add('active');
+    }
+
+    load_stored_messages();
+}
 
 function append_user_message(name: string, text: string): void {
     const color = utils.name_color(name);
@@ -49,7 +97,7 @@ async function load_stored_messages() {
     });
 }
 
-function on_message(event: MessageEvent): void {
+async function on_message(event: MessageEvent) {
     if (profile == null) return;
 
     const msg = JSON.parse(event.data);
@@ -57,24 +105,33 @@ function on_message(event: MessageEvent): void {
 
     switch (msg.kind) {
         case "new_user":
-            users[msg.user.id] = msg.user;
+            users[msg.user.public_key] = msg.user;
             append_server_message(`${msg.user.name} joined the chat.`);
+            update_users_list();
             break;
         case "relay_message":
             const user = users[msg.sender];
             const text = ws.decrypt_message(msg.payload, profile.private_key);
 
-            append_user_message(user.name, text);
-            messageStore.appendMessage({
+            let gid = msg.group_id;
+            if (gid && gid == profile.public_key)
+                gid = user.public_key;
+            else
+                gid = null;
+
+            await messageStore.appendMessage({
                 sender: user.name,
                 payload: text,
-                groupId
+                groupId: gid
             });
+
+            if (groupId === gid) append_user_message(user.name, text);
             break;
         case "user_left":
             delete users[msg.user_id];
             // const name = users[msg.user_id].name;
             // append_server_message(`${name} left the chat.`);
+            update_users_list();
             break;
     }
 }
@@ -107,14 +164,15 @@ function ws_setup() {
                 groupId
             });
 
-            Object.keys(users).forEach(user_id => {
-                const user = users[user_id];
+            Object.keys(users).forEach(user_public_key => {
+                const user = users[user_public_key];
                 const payload = ws.encrypt_message(text, user.public_key);
                 if (socket) {
                     socket.send(JSON.stringify({
                         kind: "send_message",
-                        recipient: user_id,
-                        payload
+                        recipient: user.public_key,
+                        payload,
+                        group_id: groupId
                     }));
                 }
             });
@@ -127,6 +185,13 @@ function ws_setup() {
 
     groupId = null;
     load_stored_messages();
+
+    // Setup group chat click handler
+    if (group_chat_item) {
+        group_chat_item.addEventListener('click', () => {
+            select_chat(null);
+        });
+    }
 }
 
 function on_welcome(event: SubmitEvent) {

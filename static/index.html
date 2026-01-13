@@ -15,17 +15,43 @@
             </form>
         </dialog>
 
-        <div class="container">
-            <div id="messages"></div>
-            <form id="message_form">
-                <div style="flex:1;">&nbsp;</div>
-                <div class="row">
-                    <input class="input" name="message" autocomplete="off" required
-                                                        placeholder="Type your message..." />
-                    <button class="btn" type="submit">Send</button>
+        <div class="main-wrapper">
+            <div class="sidebar">
+                <div class="sidebar-header">
+                    <h2>Chats</h2>
                 </div>
-                <div style="flex:1;">&nbsp;</div>
-            </form>
+                <div class="sidebar-section">
+                    <div class="sidebar-section-title">Channels</div>
+                    <div class="chat-list">
+                        <div class="chat-item active" data-chat-id="group">
+                            <div class="avatar" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+                                #
+                            </div>
+                            <div class="chat-info">
+                                <div class="chat-name">Group Chat</div>
+                                <div class="chat-status">Everyone is here</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="sidebar-section">
+                    <div class="sidebar-section-title">Direct Messages</div>
+                    <div class="chat-list" id="user-list"></div>
+                </div>
+            </div>
+
+            <div class="container">
+                <div id="messages"></div>
+                <form id="message_form">
+                    <div style="flex:1;">&nbsp;</div>
+                    <div class="row">
+                        <input class="input" name="message" autocomplete="off" required
+                                                            placeholder="Type your message..." />
+                        <button class="btn" type="submit">Send</button>
+                    </div>
+                    <div style="flex:1;">&nbsp;</div>
+                </form>
+            </div>
         </div>
 
         <script src="/bundle.js"></script>

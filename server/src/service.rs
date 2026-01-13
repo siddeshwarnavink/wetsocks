@@ -44,10 +44,20 @@ pub struct User {
 #[serde(tag = "kind")]
 pub enum Payload {
     #[serde(rename = "send_message")]
-    SendMessage { recipient: String, payload: String },
+    SendMessage {
+        recipient: String,
+        payload: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        group_id: Option<String>,
+    },
 
     #[serde(rename = "relay_message")]
-    RelayMessage { sender: String, payload: String },
+    RelayMessage {
+        sender: String,
+        payload: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        group_id: Option<String>,
+    },
 
     #[serde(rename = "first")]
     First { public_key: String, name: String },
@@ -62,8 +72,10 @@ pub enum Payload {
 async fn client_request_handler(
     shared_stream: Arc<Mutex<TcpStream>>,
     mut buf: BytesMut,
-    user_id: String,
+    ws_id: String,
 ) -> io::Result<()> {
+    let mut user_public_key: Option<String> = None;
+
     loop {
         let mut stream = shared_stream.lock().await;
 
@@ -81,13 +93,15 @@ async fn client_request_handler(
         drop(stream);
 
         if len < 1 {
-            user_leave(&user_id).await;
+            if let Some(ref public_key) = user_public_key {
+                user_leave(public_key).await;
+            }
             break Ok(());
         }
 
         if let Ok(req_json) = frame::get_text(&buf[..len]) {
             if req_json.len() < 1 {
-                println!("[error] invalid request from {user_id}");
+                println!("[error] invalid request from {ws_id}");
                 yield_now().await;
                 continue;
             }
@@ -95,7 +109,7 @@ async fn client_request_handler(
             let req = match serde_json::from_str(&req_json) {
                 Ok(j) => j,
                 Err(_) => {
-                    println!("[error] invalid JSON from {user_id}");
+                    println!("[error] invalid JSON from {ws_id}");
                     println!("[error] json = {}", req_json);
                     yield_now().await;
                     continue;
@@ -103,34 +117,46 @@ async fn client_request_handler(
             };
 
             let shared_stream = shared_stream.clone();
-            let user_id = user_id.clone();
 
-            tokio::spawn(async move {
-                match req {
-                    Payload::First { public_key, name } => {
-                        user_first_setup(
-                            user_id.as_str(),
+            match req {
+                Payload::First { public_key, name } => {
+                    user_public_key = Some(public_key.clone());
+                    let pk = public_key.clone();
+                    tokio::spawn(async move {
+                        user_join(
+                            pk.as_str(),
                             name.as_str(),
                             public_key.as_str(),
-                        )
-                        .await;
-                        dispatch_all_keys(
-                            user_id.as_str(),
                             shared_stream.clone(),
                         )
                         .await;
-                    }
-                    Payload::SendMessage { recipient, payload } => {
-                        relay_message(
-                            user_id.as_str(),
-                            recipient.as_str(),
-                            payload.as_str(),
+                        dispatch_all_keys(
+                            public_key.as_str(),
+                            shared_stream.clone(),
                         )
                         .await;
-                    }
-                    _ => {}
+                    });
                 }
-            });
+                Payload::SendMessage {
+                    recipient,
+                    payload,
+                    group_id,
+                } => {
+                    if let Some(ref sender_pk) = user_public_key {
+                        let sender = sender_pk.clone();
+                        tokio::spawn(async move {
+                            relay_message(
+                                sender.as_str(),
+                                recipient.as_str(),
+                                payload.as_str(),
+                                group_id,
+                            )
+                            .await;
+                        });
+                    }
+                }
+                _ => {}
+            }
         }
 
         yield_now().await;
@@ -138,11 +164,11 @@ async fn client_request_handler(
 }
 
 async fn dispatch_all_keys(
-    user_id: &str,
+    public_key: &str,
     shared_stream: Arc<Mutex<TcpStream>>,
 ) {
     let users = USERS.lock().await;
-    let user = match users.get(user_id) {
+    let user = match users.get(public_key) {
         Some(u) => u,
         None => return,
     };
@@ -158,8 +184,8 @@ async fn dispatch_all_keys(
 
     let mut stream = shared_stream.lock().await;
 
-    for (_, user) in users.iter() {
-        if user.id == user_id {
+    for (other_public_key, user) in users.iter() {
+        if other_public_key == public_key {
             continue;
         }
 
@@ -183,7 +209,12 @@ async fn dispatch_all_keys(
     }
 }
 
-async fn relay_message(sender: &str, recipient: &str, payload: &str) {
+async fn relay_message(
+    sender: &str,
+    recipient: &str,
+    payload: &str,
+    group_id: Option<String>,
+) {
     let users = USERS.lock().await;
 
     if let Some(user) = users.get(recipient) {
@@ -195,6 +226,7 @@ async fn relay_message(sender: &str, recipient: &str, payload: &str) {
         let msg = Payload::RelayMessage {
             sender: sender.to_string(),
             payload: payload.to_string(),
+            group_id,
         };
 
         if let Ok(json) = serde_json::to_string(&msg) {
@@ -317,8 +349,6 @@ async fn ws_handler(
         drop(http_header);
         drop(stream);
 
-        user_join(&user_id, shared_stream.clone(), DEFAULT_NAME).await;
-
         client_request_handler(
             shared_stream.clone(),
             buf.into(),
@@ -365,27 +395,32 @@ pub async fn request_handler(
     }
 }
 
-async fn user_join(id: &str, shared_stream: Arc<Mutex<TcpStream>>, name: &str) {
+async fn user_join(
+    public_key: &str,
+    name: &str,
+    public_key_copy: &str,
+    shared_stream: Arc<Mutex<TcpStream>>,
+) {
     let mut users = USERS.lock().await;
     let new_user = User {
-        id: id.into(),
+        id: public_key.into(),
         name: name.into(),
         shared_stream: shared_stream.clone(),
-        public_key: None,
+        public_key: Some(public_key_copy.into()),
     };
 
-    users.insert(id.into(), new_user);
+    users.insert(public_key.into(), new_user);
 }
 
-async fn user_leave(id: &str) {
+async fn user_leave(public_key: &str) {
     let mut users = USERS.lock().await;
-    users.remove(id);
+    users.remove(public_key);
 
     let mut buf = BytesMut::with_capacity(4096);
     buf.reserve(1024);
 
     let msg = Payload::UserLeft {
-        user_id: id.to_string(),
+        user_id: public_key.to_string(),
     };
 
     for (_, user) in users.iter() {
@@ -396,13 +431,5 @@ async fn user_leave(id: &str) {
             let len = frame::set_text(&mut buf, &json);
             let _ = stream.write_all(&buf[..len]).await;
         }
-    }
-}
-
-async fn user_first_setup(id: &str, name: &str, public_key: &str) {
-    let mut users = USERS.lock().await;
-    if let Some(user) = users.get_mut(id) {
-        user.name = name.into();
-        user.public_key = Some(public_key.into());
     }
 }
