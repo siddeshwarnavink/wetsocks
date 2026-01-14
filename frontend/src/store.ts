@@ -29,6 +29,7 @@ class MessageStore {
 
                     objectStore.createIndex('groupId', 'groupId', { unique: false });
                     objectStore.createIndex('timestamp', 'timestamp', { unique: false });
+                    objectStore.createIndex('is_unread', 'is_unread', { unique: false });
                 }
             };
         });
@@ -52,7 +53,7 @@ class MessageStore {
         };
     }
 
-    async appendMessage(message: Message): Promise<number> {
+    async appendMessage(message: Message, is_unread: boolean = false): Promise<number> {
         const db = this.ensureDb();
         return new Promise(async (resolve, reject) => {
             try {
@@ -68,11 +69,12 @@ class MessageStore {
                     }
                 }
 
-                const storedMessage = {
+                const storedMessage: StoredMessage = {
                     sender: message.sender,
                     payload: message.payload,
                     groupId: this.normalizeGroupId(message.groupId),
-                    timestamp: Date.now()
+                    timestamp: Date.now(),
+                    is_unread
                 };
 
                 const request = store.add(storedMessage);
@@ -155,6 +157,62 @@ class MessageStore {
             const request = store.clear();
 
             request.onsuccess = () => resolve();
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    async markMessagesAsRead(groupId: string | null): Promise<void> {
+        const db = this.ensureDb();
+
+        return new Promise((resolve, reject) => {
+            const transaction = db.transaction([MESSAGES_KEY], 'readwrite');
+            const store = transaction.objectStore(MESSAGES_KEY);
+            const index = store.index('groupId');
+
+            const normalizedGroupId = this.normalizeGroupId(groupId);
+            const request = index.openCursor(normalizedGroupId);
+
+            request.onsuccess = (event) => {
+                const cursor = (event.target as IDBRequest).result;
+                if (cursor) {
+                    const message = cursor.value;
+                    if (message.is_unread) {
+                        message.is_unread = false;
+                        cursor.update(message);
+                    }
+                    cursor.continue();
+                } else {
+                    resolve();
+                }
+            };
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    async hasUnreadMessages(groupId: string | null): Promise<boolean> {
+        const db = this.ensureDb();
+
+        return new Promise((resolve, reject) => {
+            const transaction = db.transaction([MESSAGES_KEY], 'readonly');
+            const store = transaction.objectStore(MESSAGES_KEY);
+            const index = store.index('groupId');
+
+            const normalizedGroupId = this.normalizeGroupId(groupId);
+            const request = index.openCursor(normalizedGroupId);
+
+            request.onsuccess = (event) => {
+                const cursor = (event.target as IDBRequest).result;
+                if (cursor) {
+                    const message = cursor.value;
+                    if (message.is_unread) {
+                        resolve(true);
+                        return;
+                    }
+                    cursor.continue();
+                } else {
+                    resolve(false);
+                }
+            };
             request.onerror = () => reject(request.error);
         });
     }

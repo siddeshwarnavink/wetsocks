@@ -17,13 +17,17 @@ let profile: User | null = null;
 let groupId: string | null = null;
 const users: { [id: string]: User } = {};
 
-function update_users_list() {
+async function update_users_list() {
     if (!user_list) return;
     user_list.innerHTML = "";
-    Object.keys(users).forEach(id => {
+
+    for (const id of Object.keys(users)) {
         const user = users[id];
         const color = utils.name_color(user.name);
         const isActive = groupId === user.public_key ? 'active' : '';
+        const hasUnread = await messageStore.hasUnreadMessages(user.public_key);
+        const unreadIndicator = hasUnread ? '<span class="unread-indicator"></span>' : '';
+
         user_list.innerHTML += `
         <div class="chat-item ${isActive}" data-chat-id="${user.public_key}">
             <div class="avatar online" style="background: ${color};">
@@ -33,9 +37,10 @@ function update_users_list() {
                 <div class="chat-name">${user.name}</div>
                 <div class="chat-status">Online</div>
             </div>
+            ${unreadIndicator}
         </div>
         `;
-    });
+    }
 
     const chatItems = user_list.querySelectorAll('.chat-item');
     chatItems.forEach(item => {
@@ -44,6 +49,16 @@ function update_users_list() {
             select_chat(chatId);
         });
     });
+
+    const hasGroupUnread = await messageStore.hasUnreadMessages(null);
+    if (group_chat_item) {
+        const existingIndicator = group_chat_item.querySelector('.unread-indicator');
+        if (hasGroupUnread && !existingIndicator) {
+            group_chat_item.innerHTML += '<span class="unread-indicator"></span>';
+        } else if (!hasGroupUnread && existingIndicator) {
+            existingIndicator.remove();
+        }
+    }
 }
 
 function select_chat(chatId: string | null) {
@@ -61,6 +76,9 @@ function select_chat(chatId: string | null) {
     }
 
     load_stored_messages();
+    messageStore.markMessagesAsRead(chatId).then(() => {
+        update_users_list();
+    });
 }
 
 function append_user_message(name: string, text: string): void {
@@ -114,18 +132,17 @@ async function on_message(event: MessageEvent) {
             const text = ws.decrypt_message(msg.payload, profile.private_key);
 
             let gid = msg.group_id;
-            if (gid && gid == profile.public_key)
-                gid = user.public_key;
-            else
-                gid = null;
+            if (gid && gid == profile.public_key) gid = user.public_key;
+            else gid = null;
 
             await messageStore.appendMessage({
                 sender: user.name,
                 payload: text,
                 groupId: gid
-            });
+            }, groupId !== gid);
 
             if (groupId === gid) append_user_message(user.name, text);
+            else update_users_list();
             break;
         case "user_left":
             delete users[msg.user_id];

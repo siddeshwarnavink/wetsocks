@@ -263,17 +263,6 @@ dialog.model form {
   flex-flow: column;
 }
 
-/*
-.container {
-    height: 100vh;
-    display: flex;
-    flex-flow: column;
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 20px;
-}
-*/
-
 #messages {
     flex: 1;
     overflow-y: auto;
@@ -361,8 +350,35 @@ dialog.model form {
     white-space: nowrap;
 }
 
-/* Empty space styling */
 #message_form > div:first-child,
 #message_form > div:last-child {
     display: none;
+}
+
+.unread-indicator {
+    position: absolute;
+    top: 50%;
+    right: 16px;
+    transform: translateY(-50%);
+    width: 10px;
+    height: 10px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border-radius: 50%;
+    box-shadow: 0 2px 8px rgba(102, 126, 234, 0.4);
+    animation: pulse 2s ease-in-out infinite;
+}
+
+.chat-item.active .unread-indicator {
+    display: none;
+}
+
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+        transform: translateY(-50%) scale(1);
+    }
+    50% {
+        opacity: 0.6;
+        transform: translateY(-50%) scale(1.1);
+    }
 }
